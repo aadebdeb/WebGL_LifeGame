@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <title>Life Game by WebGL</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+
+    <script id="vertex-shader" type="x-shader/x-vertex">
+      attribute vec3 aPosition;
+      attribute vec2 aTextureCoordinate;
+
+      varying vec2 vTextureCoordinate;
+
+      void main() {
+        vTextureCoordinate = aTextureCoordinate;
+        gl_Position = vec4(aPosition, 1.0);
+      }
+    </script>
+
+    <script id="initialize-shader" type="x-shader/x-fragment">
+      precision mediump float;
+
+      uniform vec2 uOffset;
+
+      varying vec2 vTextureCoordinate;
+
+      float random(vec2 st) {
+        return fract(sin(dot(st, vec2(12.9898,78.233))) * 43758.5453123);
+      }
+
+      void main() {
+        gl_FragColor = random((gl_FragCoord.xy + uOffset) * 0.001) < 0.5 ? vec4(0.0, 1.0, 0.0, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
+      }
+    </script>
+
+    <script id="update-shader" type="x-shader/x-fragment">
+      precision mediump float;
+
+      uniform sampler2D aTexture;
+      uniform vec2 uResolution;
+
+      varying vec2 vTextureCoordinate;
+
+      void main() {
+        vec2 scale = 1.0 / uResolution;
+        bool isAlive = texture2D(aTexture, gl_FragCoord.xy * scale).g < 0.5 ? false : true;
+        int sum = 0;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2(-1.0,  1.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2( 0.0,  1.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2( 1.0,  1.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2(-1.0,  0.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2( 1.0,  0.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2(-1.0, -1.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2( 0.0, -1.0)) * scale).g < 0.5 ? 0 : 1;
+        sum += texture2D(aTexture, (gl_FragCoord.xy + vec2( 1.0, -1.0)) * scale).g < 0.5 ? 0 : 1;
+
+        gl_FragColor = ((isAlive && (sum == 2 || sum == 3)) || (!isAlive && sum == 3)) ? vec4(0.0, 1.0, 0.0, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
+
+      }
+    </script>
+
+    <script id="render-shader" type="x-shader/x-fragment">
+      precision mediump float;
+
+      uniform sampler2D aTexture;
+
+      varying vec2 vTextureCoordinate;
+
+      void main() {
+        gl_FragColor = texture2D(aTexture, vTextureCoordinate);
+      }
+    </script>
+
+    <script>
+
+      // creates a shader
+      // @param [WebGLRenderingContext] gl
+      // @param [String] id - id of a element which has shader source
+      // @return [WebGLShader]
+      function createShader(gl, id) {
+        const elem = document.getElementById(id);
+        if (!elem) {
+          throw new Error('Can not find element "'  + id + '"')
+        }
+
+        const type = elem.type === 'x-shader/x-vertex' ? gl.VERTEX_SHADER :
+                     elem.type === 'x-shader/x-fragment' ? gl.FRAGMENT_SHADER : null;
+        if (!type) {
+          throw new Error('Can not math shader type"' + elem.type + '"')
+        }
+
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, elem.text);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          throw new Error('Can not compile shader sourde (' + gl.getShaderInfoLog(shader) + ')');
+        }
+
+        return shader;
+      }
+
+      // creates a program
+      // @param [WebGLRenderingContext] gl
+      // @param [WebGLShader] vertexShader
+      // @param [WebGLShader] fragmentShader
+      // @return [WebGLProgram]
+      function createProgram(gl, vertexShader, fragmentShader) {
+        const program = gl.createProgram();
+
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          throw new Error('Can not link program(' + gl.getProgramParameter(program) + ')');
+        }
+
+        return program;
+      }
+
+      // creates an array buffer
+      // @param [WebGLRenderingContext] gl
+      // @param [Array<Number>] array
+      // @param [WebGLBuffer]
+      function createArrayBuffer(gl, array) {
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(array), gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        return buffer;
+      }
+
+      // sets attributes
+      // @param [WebGLRenderingContext] gl
+      // @param [Object] attributes
+      function setAttributes(gl, attributes) {
+        Object.keys(attributes).forEach((name) => {
+          const attribute = attributes[name];
+          gl.bindBuffer(gl.ARRAY_BUFFER, attribute.buffer);
+          gl.enableVertexAttribArray(attribute.location);
+          gl.vertexAttribPointer(attribute.location, attribute.size, gl.FLOAT, false, 0, 0);
+        });
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      }
+
+      // creates a framebuffer
+      // @param [WebGLRenderingContext] gl
+      // @param [Number] width
+      // @param [Number] height
+      // @return [Object]
+      function createFrameBuffer(gl, width, height) {
+        const frameBuffer = gl.createFramebuffer(),
+              texture = gl.createTexture();
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        return {
+          frameBuffer: frameBuffer,
+          texture: texture
+        };
+      }
+
+      document.addEventListener('DOMContentLoaded', function() {
+
+        const canvas = document.getElementById('canvas');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const gl = canvas.getContext('webgl');
+
+        const vertexShader = createShader(gl, 'vertex-shader');
+        const initializeShader = createShader(gl, 'initialize-shader');
+        const updateShader = createShader(gl, 'update-shader');
+        const renderShader = createShader(gl, 'render-shader');
+
+        const initializeProgram = createProgram(gl, vertexShader, initializeShader);
+        const updateProgram = createProgram(gl, vertexShader, updateShader);
+        const renderProgram = createProgram(gl, vertexShader, renderShader);
+
+        const position = [
+          -1.0,  1.0,  0.0,
+          -1.0, -1.0,  0.0,
+           1.0,  1.0,  0.0,
+           1.0, -1.0,  0.0
+        ];
+        const positionBuffer = createArrayBuffer(gl, position);
+
+        const texCoord =[
+          0.0, 1.0,
+          0.0, 0.0,
+          1.0, 1.0,
+          1.0, 0.0
+        ];
+        const texCoordBuffer = createArrayBuffer(gl, texCoord);
+
+        let prevFrameBufferObj = createFrameBuffer(gl, canvas.width, canvas.height);
+        let nextFrameBufferObj = createFrameBuffer(gl, canvas.width, canvas.height);
+
+        gl.useProgram(initializeProgram);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFrameBufferObj.frameBuffer);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        setAttributes(gl, {
+          aPosition: {
+            location: gl.getAttribLocation(initializeProgram, 'aPosition'),
+            size: 3,
+            buffer: positionBuffer
+          }
+        });
+        gl.uniform2fv(gl.getUniformLocation(initializeProgram, 'uOffset'), [Math.random() * canvas.width, Math.random() * canvas.height]);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.flush();
+
+        const render = () => {
+          gl.useProgram(updateProgram);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, nextFrameBufferObj.frameBuffer);
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.clearColor(0.0, 0.0, 0.0, 1.0);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, prevFrameBufferObj.texture);
+          setAttributes(gl, {
+            aPosition: {
+              location: gl.getAttribLocation(updateProgram, 'aPosition'),
+              size: 3,
+              buffer: positionBuffer
+            }
+          });
+          gl.uniform1i(gl.getUniformLocation(updateProgram, 'uTexture'), 0);
+          gl.uniform2fv(gl.getUniformLocation(updateProgram, 'uResolution'), [canvas.width, canvas.height]);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          gl.flush();
+
+          gl.useProgram(renderProgram);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.clearColor(0.0, 0.0, 0.0, 1.0);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, nextFrameBufferObj.texture);
+          setAttributes(gl, {
+            aPosition: {
+              location: gl.getAttribLocation(renderProgram, 'aPosition'),
+              size: 3,
+              buffer: positionBuffer
+            },
+            aTextureCoordinate: {
+              location: gl.getAttribLocation(renderProgram, 'aTextureCoordinate'),
+              size: 2,
+              buffer: texCoordBuffer
+            }
+          });
+          gl.uniform1i(gl.getUniformLocation(updateProgram, 'uTexture'), 0);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          gl.flush();
+
+          let tmp = prevFrameBufferObj;
+          prevFrameBufferObj = nextFrameBufferObj;
+          nextFrameBufferObj = tmp;
+
+          requestAnimationFrame(render)
+        };
+
+        requestAnimationFrame(render);
+
+      });
+    </script>
+
+  </body>
+</html>
